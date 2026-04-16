@@ -1,0 +1,59 @@
+忽略 Python 緩存與編譯文件
+
+pycache/
+*.py[cod]
+*$py.class
+
+忽略虛擬環境
+
+venv/
+env/
+.env
+.conda/
+.venv/
+
+忽略 IDE 與編輯器配置
+
+.idea/
+.vscode/
+*.swp
+*.swo
+
+🔴 防止超過 GitHub 100MB 限制導致 Push 失敗 (極其重要)
+
+data_ds15/*.pkl
+data_org/*.pkl
+task_A_recovery/*.pkl
+task_B_tte/*.pkl
+
+🔴 忽略特徵工程與增量訓練產生的大型矩陣檔案
+
+processed_data/
+*.npy
+
+忽略下載的 OSM 路網源文件與快取文件 (太大了，隊友可以自己跑腳本下載)
+
+*.graphml
+*.osm
+
+macOS 系統文件
+
+.DS_Store# 忽略缓存文件夹
+cache/
+
+# 忽略日志文件
+*.log
+
+# Windows 系统文件
+Thumbs.db
+Desktop.ini
+
+# 忽略缓存文件夹
+cache/
+
+# 忽略日志文件
+*.log
+
+# Windows 系统文件
+Thumbs.db
+Desktop.ini
