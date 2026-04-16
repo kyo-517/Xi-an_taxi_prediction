@@ -8,6 +8,7 @@ from osm_map_matching import get_or_download_xian_graph, route_constrained_inter
 
 USE_MAP_MATCHING = True 
 PROCESSED_DIR = "processed_data"
+SUBMISSION_DIR = "submissions"
 
 def load_knn_db():
     knn_path = os.path.join(PROCESSED_DIR, "knn_db.pkl")
@@ -134,10 +135,13 @@ def run_task_a():
     OSM_Graph = get_or_download_xian_graph() if USE_MAP_MATCHING else None
 
     base_dir = "task_A_recovery"
-    for filename in ["val_input_8.pkl", "val_input_16.pkl"]:
+    # 支持验证集与课堂测试命名（val_input / test_input）
+    for filename in ["val_input_8.pkl", "val_input_16.pkl", "test_input_8.pkl", "test_input_16.pkl"]:
         input_path = os.path.join(base_dir, filename)
-        if not os.path.exists(input_path): continue
-        with open(input_path, 'rb') as f: input_data = pickle.load(f)
+        if not os.path.exists(input_path):
+            continue
+        with open(input_path, 'rb') as f:
+            input_data = pickle.load(f)
             
         print(f"\n[*] 正在执行混合修补 (k-NN -> OSM -> 线性): {filename} ...")
         pred_results = []
@@ -157,8 +161,17 @@ def run_task_a():
             mae, rmse = evaluate_recovery(pred_results, gt_data, input_data)
             print(f"\n    -> [混合模型最终成绩] MAE: {mae:.2f} 米, RMSE: {rmse:.2f} 米")
             
+        # 本地保存预测结果（用于查看/评测）
         with open(os.path.join(base_dir, filename.replace("input", "pred")), 'wb') as f:
             pickle.dump(pred_results, f)
+        # 生成提交文件（符合要求：list of {traj_id, coords}）
+        os.makedirs(SUBMISSION_DIR, exist_ok=True)
+        difficulty = filename.split('_')[-1].split('.')[0]  # 8 或 16
+        submit_name = f"task_A_pred_{difficulty}.pkl"
+        submit_path = os.path.join(SUBMISSION_DIR, submit_name)
+        with open(submit_path, 'wb') as f:
+            pickle.dump(pred_results, f)
+        print(f"    -> 已生成提交文件: {submit_path}")
 
 if __name__ == "__main__":
     run_task_a()

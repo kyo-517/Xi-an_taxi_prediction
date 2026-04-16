@@ -14,6 +14,7 @@ except ImportError:
     print("[警告] 未安裝 LightGBM (建議 pip install lightgbm)。本次運行將僅使用 XGBoost。")
 
 PROCESSED_DIR = "processed_data"
+SUBMISSION_DIR = "submissions"
 
 def train_models_in_batches(xgb_path, lgb_path):
     """
@@ -138,7 +139,13 @@ def run_task_b():
     global_avg = od_data['global_avg']
     
     # 3. 對驗證集進行預測
+    # 支持验证集与课堂测试输入名
     val_input_file = os.path.join("task_B_tte", "val_input.pkl")
+    if not os.path.exists(val_input_file):
+        val_input_file = os.path.join("task_B_tte", "test_input.pkl")
+    if not os.path.exists(val_input_file):
+        print("[警告] 未找到 task_B_tte 下的 val_input.pkl 或 test_input.pkl，跳过推理。")
+        return
     with open(val_input_file, 'rb') as f:
         val_input = pickle.load(f)
         
@@ -186,8 +193,15 @@ def run_task_b():
         mae, rmse, mape = evaluate_metrics(y_true, y_pred_eval)
         print(f"    -> [高階融合模型評測] MAE: {mae:.2f} 秒 | RMSE: {rmse:.2f} 秒 | MAPE: {mape:.2f} %")
         
+    # 本地保存用于查看
     with open(os.path.join("task_B_tte", "val_pred.pkl"), 'wb') as f:
         pickle.dump(pred_results, f)
+    # 生成提交文件（符合要求：list of {traj_id, travel_time}）
+    os.makedirs(SUBMISSION_DIR, exist_ok=True)
+    submit_path = os.path.join(SUBMISSION_DIR, "task_B_pred.pkl")
+    with open(submit_path, 'wb') as f:
+        pickle.dump(pred_results, f)
+    print(f"    -> 已生成 Task B 提交文件: {submit_path}")
 
 if __name__ == "__main__":
     print("="*50)
