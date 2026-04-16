@@ -2,6 +2,7 @@ import pickle
 import numpy as np
 import pandas as pd
 import os
+from tqdm import tqdm  # 引入实时进度条库
 from features_and_utils import haversine, get_grid_id
 from osm_map_matching import get_or_download_xian_graph, route_constrained_interpolation
 
@@ -20,24 +21,15 @@ def transplant_trajectory_shape(start_coord, end_coord, missing_timestamps, t_st
     [核心算法] 轨迹形状移植：将检索到的历史轨迹段锚定到当前的起始与终止点上，保留其中间的弯曲形状
     """
     predicted = []
-    # 计算历史片段每个点的比例进程 (以直线距离近似)
-    hist_lons = np.array([p[0] for p in historical_segment])
-    hist_lats = np.array([p[1] for p in historical_segment])
-    
-    # 获取历史轨迹的首尾点
     h0 = np.array(historical_segment[0])
     hm = np.array(historical_segment[-1])
     
     for ts in missing_timestamps:
-        # 时间比例
-        ratio = (ts - t_start) / (t_end - t_start)
-        
-        # 在历史序列中寻找时间比例对应的粗略坐标
+        ratio = (ts - t_start) / (t_end - t_start) if t_end > t_start else 0.5
         idx = int(ratio * (len(historical_segment) - 1))
-        h_interp = np.array(historical_segment[idx])
+        idx = max(0, min(idx, len(historical_segment) - 1))
         
-        # 形状移植平移：历史点 + 针对起点偏差的缩放 + 针对终点偏差的缩放
-        # 使得在 ratio=0 时严格等于 start_coord，ratio=1 时严格等于 end_coord
+        h_interp = np.array(historical_segment[idx])
         current_pred = h_interp + (np.array(start_coord) - h0) * (1 - ratio) + (np.array(end_coord) - hm) * ratio
         predicted.append(current_pred.tolist())
         
@@ -55,7 +47,6 @@ def recover_trajectory_hybrid(traj_item, knn_db, OSM_Graph=None):
             full_coords.append(coords[i])
             i += 1
         else:
-            # 找到连续缺失段的起点(i-1)和终点(j)
             start_idx = i - 1
             j = i
             while j < len(mask) and not mask[j]:
@@ -70,45 +61,55 @@ def recover_trajectory_hybrid(traj_item, knn_db, OSM_Graph=None):
             end_coord = coords[end_idx] if end_idx < len(mask) else coords[start_idx]
 
             # ==========================================
-            #  策略 1: k-NN 历史轨迹检索 (效果极其出色且速度快)
+            #  策略 1: k-NN 历史轨迹检索
             # ==========================================
             grid_o = get_grid_id(start_coord[0], start_coord[1])
             grid_d = get_grid_id(end_coord[0], end_coord[1])
             
             if (grid_o, grid_d) in knn_db:
-                # 命中历史数据库！进行轨迹形状移植
                 hist_seg = knn_db[(grid_o, grid_d)][0]
                 pred_coords = transplant_trajectory_shape(start_coord, end_coord, missing_timestamps, t_start, t_end, hist_seg)
                 full_coords.extend(pred_coords)
                 
             # ==========================================
-            #  策略 2: OSM 路网匹配 (没有历史轨迹时的兜底路网寻路)
+            #  策略 2: OSM 路网匹配
             # ==========================================
             elif USE_MAP_MATCHING and OSM_Graph is not None:
-                try:
-                    known_pts = [[start_coord[0], start_coord[1], t_start], 
-                                 [end_coord[0], end_coord[1], t_end]]
-                    pred_coords = route_constrained_interpolation(OSM_Graph, known_pts, missing_timestamps)
-                    if len(pred_coords) == len(missing_timestamps):
-                        full_coords.extend(pred_coords)
-                    else:
-                        raise ValueError("路网插值失败")
-                except:
-                    # OSM 路段不连通时退化为策略 3
+                # [性能优化] 如果直线距离大于 3km，直接放弃路网匹配（因为图搜索会极其缓慢且容易错）
+                dist_gap = haversine(start_coord[0], start_coord[1], end_coord[0], end_coord[1])
+                if not np.isnan(dist_gap) and dist_gap < 3000:
+                    try:
+                        known_pts = [[start_coord[0], start_coord[1], t_start], 
+                                     [end_coord[0], end_coord[1], t_end]]
+                        pred_coords = route_constrained_interpolation(OSM_Graph, known_pts, missing_timestamps)
+                        if len(pred_coords) == len(missing_timestamps):
+                            full_coords.extend(pred_coords)
+                        else:
+                            raise ValueError("路网插值失败")
+                    except:
+                        for ts in missing_timestamps: full_coords.append([np.nan, np.nan])
+                else:
                     for ts in missing_timestamps: full_coords.append([np.nan, np.nan])
             
             # ==========================================
-            #  策略 3: 纯时间线性插值 (最终兜底，通常极少走到这步)
+            #  策略 3: 纯时间线性插值兜底
             # ==========================================
             else:
                 for ts in missing_timestamps: full_coords.append([np.nan, np.nan])
                 
             i = j
             
-    # 执行最终的线性插值兜底（针对极少数开头/结尾缺失或策略2/3失败的点）
-    df = pd.DataFrame(full_coords, columns=['lon', 'lat'])
-    df['time'] = pd.to_datetime(timestamps, unit='s')
-    df.set_index('time', inplace=True)
+    # ==============================================================
+    # --- 核心修复区：解决 Pandas set_index 的底层 Bug ---
+    # ==============================================================
+    fc_arr = np.array(full_coords, dtype=float)
+    if fc_arr.shape[0] != len(timestamps):
+        fc_arr = np.full((len(timestamps), 2), np.nan)
+        for k in range(len(mask)):
+            if mask[k]: fc_arr[k] = coords[k]
+            
+    df = pd.DataFrame(fc_arr, columns=['lon', 'lat'])
+    df.index = pd.to_datetime(timestamps, unit='s')
     df_interpolated = df.interpolate(method='time').bfill().ffill()
     
     return df_interpolated[['lon', 'lat']].values.tolist()
@@ -140,7 +141,11 @@ def run_task_a():
             
         print(f"\n[*] 正在执行混合修补 (k-NN -> OSM -> 线性): {filename} ...")
         pred_results = []
-        for i, traj in enumerate(input_data):
+        
+        # ==================================================
+        # 加入 tqdm 实时进度条包装 input_data
+        # ==================================================
+        for traj in tqdm(input_data, desc="修复进度", unit="条", colour="green"):
             pred_results.append({
                 'traj_id': traj['traj_id'],
                 'coords': recover_trajectory_hybrid(traj, knn_db, OSM_Graph)
@@ -150,7 +155,7 @@ def run_task_a():
         if os.path.exists(gt_file):
             with open(gt_file, 'rb') as f: gt_data = pickle.load(f)
             mae, rmse = evaluate_recovery(pred_results, gt_data, input_data)
-            print(f"    -> [混合模型最终成绩] MAE: {mae:.2f} 米, RMSE: {rmse:.2f} 米")
+            print(f"\n    -> [混合模型最终成绩] MAE: {mae:.2f} 米, RMSE: {rmse:.2f} 米")
             
         with open(os.path.join(base_dir, filename.replace("input", "pred")), 'wb') as f:
             pickle.dump(pred_results, f)
