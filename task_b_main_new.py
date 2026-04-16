@@ -1,7 +1,6 @@
 import pickle
 import numpy as np
 import os
-import glob
 import xgboost as xgb
 import warnings
 from tqdm import tqdm
@@ -18,58 +17,61 @@ except ImportError:
 PROCESSED_DIR = "processed_data"
 INPUT_DIR = "task_B_tte"
 
-def train_models_in_batches_direct_mae(xgb_path, lgb_path):
+def train_models_direct_mae(xgb_path, lgb_path):
     """
-    直接使用 L1 Loss (MAE) 作为底层优化目标的训练流程
+    基于双源数据的全新单次训练流程 (恢复全量模型参数容量)
     """
-    batch_files = sorted(glob.glob(os.path.join(PROCESSED_DIR, "X_batch_*.npy")))
-    if not batch_files:
-        print("[错误] 未找到特征切片，请先运行 data_processor.py。")
+    x_file = os.path.join(PROCESSED_DIR, "X_train_final.npy")
+    y_file = os.path.join(PROCESSED_DIR, "y_train_final.npy")
+    
+    if not os.path.exists(x_file):
+        print(f"[错误] 未找到特征切片 {x_file}，请先运行 data_processor_v2.py。")
         return None, None
 
-    print(f"[*] 启动双模型 MAE 直优训练流程 (抛弃 Log，直接优化绝对误差)...")
+    print(f"[*] 启动双模型 MAE 直优训练流程 (基于 org 双源高精度数据)...")
+    X_train = np.load(x_file)
+    y_train = np.load(y_file)
     
-    # 【黑科技】：将 objective 设为 reg:absoluteerror (直接优化 MAE)
+    # 【核心修复】：恢复模型的深度学习容量，将树的数量从 45 提升至 350
+    print(f"    -> 配置 XGBoost 引擎 (350 棵树)...")
     xgb_model = xgb.XGBRegressor(
-        n_estimators=45, learning_rate=0.08, max_depth=8, 
-        subsample=0.85, colsample_bytree=0.85, 
-        objective='reg:absoluteerror',  # 核心改动：底层直接优化 MAE
-        gamma=0.2, min_child_weight=3,
-        random_state=42, n_jobs=-1
+        n_estimators=350,            # 恢复全量训练所需的树数量
+        learning_rate=0.08, 
+        max_depth=8, 
+        subsample=0.85, 
+        colsample_bytree=0.85, 
+        objective='reg:absoluteerror', 
+        gamma=0.2, 
+        min_child_weight=3,
+        random_state=42, 
+        n_jobs=-1
     )
     
     lgb_model = None
     if USE_LGB:
+        print(f"    -> 配置 LightGBM 引擎 (350 棵树)...")
         lgb_model = lgb.LGBMRegressor(
-            n_estimators=45, learning_rate=0.08, max_depth=8, num_leaves=63, 
-            #树深度调回 8, 增加叶子数以提升拟合能力
-            subsample=0.85, colsample_bytree=0.85,
-            objective='mae',                # 核心改动：底层直接优化 MAE
-            min_split_gain=0.2, min_child_samples=10,
-            random_state=42, n_jobs=-1
+            n_estimators=350,        # 恢复全量训练所需的树数量
+            learning_rate=0.08, 
+            max_depth=8, 
+            num_leaves=63, 
+            subsample=0.85, 
+            colsample_bytree=0.85,
+            objective='mae',               
+            min_split_gain=0.2, 
+            min_child_samples=10,
+            random_state=42, 
+            n_jobs=-1
         )
 
-    for batch_idx, x_file in enumerate(batch_files):
-        y_file = x_file.replace("X_batch", "y_batch")
-        X_batch = np.load(x_file)
-        y_batch = np.load(y_file) # 直接使用真实的秒，不加 log
+    print(f"    -> 正在强力训练 XGBoost (样本数: {len(X_train)})...")
+    xgb_model.fit(X_train, y_train)
         
-        print(f"    -> 正在训练 Batch {batch_idx+1}/{len(batch_files)} (样本数: {len(X_batch)})...")
-        
-        if batch_idx == 0:
-            xgb_model.fit(X_batch, y_batch)
-        else:
-            xgb_model.n_estimators += 45  
-            xgb_model.fit(X_batch, y_batch, xgb_model=xgb_model.get_booster())
+    if USE_LGB:
+        print(f"    -> 正在强力训练 LightGBM...")
+        lgb_model.fit(X_train, y_train)
             
-        if USE_LGB:
-            if batch_idx == 0:
-                lgb_model.fit(X_batch, y_batch)
-            else:
-                lgb_model.n_estimators += 45
-                lgb_model.fit(X_batch, y_batch, init_model=lgb_model.booster_)
-            
-    print("[*] 训练完成！双模型已生成。")
+    print("[*] 训练完成！巅峰双模型已生成。")
     return xgb_model, lgb_model
 
 def run_task_b():
@@ -85,13 +87,17 @@ def run_task_b():
         if USE_LGB and os.path.exists(lgb_path):
             lgb_model = lgb.Booster(model_file=lgb_path)
     else:
-        xgb_model, lgb_model = train_models_in_batches_direct_mae(xgb_path, lgb_path)
+        xgb_model, lgb_model = train_models_direct_mae(xgb_path, lgb_path)
         if xgb_model is None: return
         xgb_model.save_model(xgb_path)
         if USE_LGB and lgb_model is not None:
             lgb_model.booster_.save_model(lgb_path)
 
-    od_path = os.path.join(PROCESSED_DIR, "od_matrix.pkl")
+    od_path = os.path.join(PROCESSED_DIR, "od_matrix_org.pkl")
+    if not os.path.exists(od_path):
+         print(f"[错误] 未找到高精度知识库 {od_path}，请先运行 data_processor_v2.py。")
+         return
+         
     with open(od_path, 'rb') as f:
         od_data = pickle.load(f)
     od_avg, glob_avg = od_data['od_avg'], od_data['global_avg']
@@ -106,7 +112,14 @@ def run_task_b():
         
         X_feats, traj_ids = [], []
         for traj in tqdm(data, desc=f"提取特征", unit="条", colour="green"):
-            f, g_o, g_d = extract_task_b_features_advanced(traj['coords'], traj['departure_timestamp'])
+            # 兼容 extract_task_b_features_advanced 的返回值 (新旧版本均适用)
+            ext_res = extract_task_b_features_advanced(traj['coords'], traj['departure_timestamp'])
+            if len(ext_res) == 3:
+                f, g_o, g_d = ext_res
+            else:
+                f = ext_res
+                g_o, g_d = "unknown", "unknown"
+                
             hist_t = od_avg.get(f"{g_o}_{g_d}", glob_avg)
             X_feats.append(f + [hist_t])
             traj_ids.append(traj['traj_id'])
@@ -117,7 +130,6 @@ def run_task_b():
         
         if USE_LGB and lgb_model is not None:
             lgb_pred = lgb_model.predict(X_feats_arr)
-            # 根据经验，在树较深时 XGBoost 抗过拟合能力稍强，权重调整为 0.6 : 0.4
             final_pred_time = 0.6 * xgb_pred + 0.4 * lgb_pred
         else:
             final_pred_time = xgb_pred
@@ -137,7 +149,7 @@ def run_task_b():
             y_pred_eval = [item['travel_time'] for item in results]
             
             mae, rmse, mape = evaluate_metrics(y_true, y_pred_eval)
-            print(f"    -> [MAE直优融合模型成绩] MAE: {mae:.2f} 秒 | RMSE: {rmse:.2f} 秒 | MAPE: {mape:.2f} %")
+            print(f"    -> [高精度先验融合模型成绩] MAE: {mae:.2f} 秒 | RMSE: {rmse:.2f} 秒 | MAPE: {mape:.2f} %")
             
         out_path = os.path.join(INPUT_DIR, f"{prefix}_pred.pkl")
         with open(out_path, 'wb') as f: pickle.dump(results, f)
