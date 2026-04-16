@@ -50,9 +50,22 @@ def train_model_in_batches():
     return model
 
 def run_task_b():
-    # 1. 训练模型 (基于已保存的批次特征)
-    model = train_model_in_batches()
-    if model is None: return
+    model_path = os.path.join(PROCESSED_DIR, "xgb_model.json")
+    
+    # 1. 训练或加载模型
+    if os.path.exists(model_path):
+        print(f"[*] 发现本地已保存的模型权重 {model_path}，正在直接加载...")
+        model = xgb.XGBRegressor()
+        model.load_model(model_path)
+    else:
+        print("[*] 未发现本地模型，启动分批次训练流程...")
+        model = train_model_in_batches()
+        if model is None: return
+        
+        # 保存模型到本地
+        model.save_model(model_path)
+        print(f"[*] 模型已成功持久化保存至: {model_path}")
+    
 
     # 2. 获取在 Data Processor 中提前建好的全局 OD 知识库
     od_matrix_path = os.path.join(PROCESSED_DIR, "od_matrix.pkl")
