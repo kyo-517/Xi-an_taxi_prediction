@@ -57,3 +57,7 @@ cache/
 # Windows 系统文件
 Thumbs.db
 Desktop.ini
+
+# 忽略所有预测生成的结果文件
+submissions/
+*pred*.pkl
