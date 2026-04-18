@@ -29,6 +29,8 @@ task_B_tte/*.pkl
 🔴 忽略特徵工程與增量訓練產生的大型矩陣檔案
 
 processed_data/
+processed_data_a/
+processed_data_b/
 *.npy
 
 忽略下載的 OSM 路網源文件與快取文件 (太大了，隊友可以自己跑腳本下載)

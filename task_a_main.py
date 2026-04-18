@@ -15,7 +15,7 @@ from datetime import datetime
 from scipy.interpolate import PchipInterpolator
 from features_and_utils import haversine
 
-PROCESSED_DIR  = "processed_data"
+PROCESSED_DIR  = "processed_data_a"
 SUBMISSION_DIR = "submissions"
 INPUT_DIR      = "task_A_recovery"
 

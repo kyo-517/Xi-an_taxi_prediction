@@ -14,7 +14,7 @@ try:
 except ImportError:
     USE_LGB = False
 
-PROCESSED_DIR = "processed_data"
+PROCESSED_DIR = "processed_data_b"
 INPUT_DIR = "task_B_tte"
 
 def train_models_direct_mae(xgb_path, lgb_path):

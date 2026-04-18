@@ -1,12 +1,13 @@
 """
 数据预处理器（合并版）：
-1. 用 data_org（高密度~3s）构建精细 k-NN 轨迹形状库（Task A）
-2. 用 data_org 构建高精度 OD 耗时矩阵（Task B 先验知识）
-3. 用 data_ds15 构建对齐特征空间的训练集（Task B）
+1. 用 data_org 构建 Task A 所需的 k-NN 轨迹形状库
+2. 用 data_org 构建 Task B 所需的高精度 OD 先验
+3. 用 data_ds15 构建 Task B 所需的对齐特征训练集
+4. 同时生成 Task B 新版（task_b_main_new.py）所需的 processed_data_b 输出
 """
+import os
 import pickle
 import numpy as np
-import os
 
 try:
     import pygeohash as pgh
@@ -17,7 +18,8 @@ except ImportError:
 # 配置文件路径
 ORG_TRAIN_FILE  = os.path.join("data_org",  "train.pkl")
 DS15_TRAIN_FILE = os.path.join("data_ds15", "train.pkl")
-PROCESSED_DIR   = "processed_data"
+PROCESSED_DIR_A = "processed_data_a"
+PROCESSED_DIR_B = "processed_data_b"
 BATCH_SIZE      = 20000
 
 
@@ -25,17 +27,26 @@ def get_grid_id(lon, lat, precision=6):
     """将经纬度转换为 Geohash 网格 ID，精度 6 约等于 1.2km x 0.6km 的街区"""
     if HAS_GEOHASH:
         return pgh.encode(lat, lon, precision=precision)
-    else:
-        return f"{int(lat * 100)}_{int(lon * 100)}"
+    return f"{int(lat * 100)}_{int(lon * 100)}"
+
+
+def ensure_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+
+def save_pickle(obj, path):
+    with open(path, "wb") as f:
+        pickle.dump(obj, f)
 
 
 def build_knowledge_from_org():
     """
-    第一阶段：从高频 data_org 中提取物理先验知识。
-    - Task A：用 gap=8 / gap=16 精确模拟缺失场景，构建高密度 k-NN 形状库
-    - Task B：构建全局精准 OD 耗时矩阵
+    第一阶段：从高频 data_org 提取物理先验知识。
+    - Task A：构建高密度 k-NN 轨迹形状库
+    - Task B：构建高精度 OD 耗时矩阵
     """
-    print(f"[*] 正在读取高频原始数据 {ORG_TRAIN_FILE} (约 13 万条)...")
+    print(f"[*] 正在读取高频原始数据 {ORG_TRAIN_FILE}...")
     if not os.path.exists(ORG_TRAIN_FILE):
         print("    [警告] 未找到 data_org/train.pkl，请确保文件存在！")
         return {}
@@ -48,7 +59,7 @@ def build_knowledge_from_org():
     knn_db  = {}
     MAX_PER_KEY = 3
 
-    print("[*] 正在挖掘 OD 历史耗时矩阵 (Task B) 与物理转弯形状库 (Task A)...")
+    print("[*] 正在构建 Task A k-NN 轨迹库 和 Task B OD 先验...")
 
     for idx, traj in enumerate(org_data):
         if idx % 20000 == 0:
@@ -60,10 +71,6 @@ def build_knowledge_from_org():
         if n < 10:
             continue
 
-        # ============================================================
-        # 挖掘 1：Task A 高密度 k-NN 形状库
-        # 用 gap=8 / gap=16 精确模拟缺失场景
-        # ============================================================
         if n >= 30:
             avg_dt  = (timestamps[-1] - timestamps[0]) / (n - 1) if n > 1 else 3.0
             ds_step = max(1, round(15.0 / avg_dt))
@@ -78,7 +85,6 @@ def build_knowledge_from_org():
 
                     g_o = get_grid_id(coords[idx_start][0], coords[idx_start][1])
                     g_d = get_grid_id(coords[idx_end][0],   coords[idx_end][1])
-
                     if g_o == g_d:
                         continue
 
@@ -90,46 +96,40 @@ def build_knowledge_from_org():
                         if len(segment) >= 2:
                             knn_db[key].append(segment)
 
-        # ============================================================
-        # 挖掘 2：Task B 全局精准 OD 耗时矩阵
-        # 过滤超过 3 小时的异常订单
-        # ============================================================
         travel_time = timestamps[-1] - timestamps[0]
         if 0 < travel_time <= 10800:
             grid_o = get_grid_id(coords[0][0],  coords[0][1])
             grid_d = get_grid_id(coords[-1][0], coords[-1][1])
             od_key = f"{grid_o}_{grid_d}"
-            if od_key not in od_dict:
-                od_dict[od_key] = []
-            od_dict[od_key].append(travel_time)
+            od_dict.setdefault(od_key, []).append(travel_time)
 
-    # 保存 Task A 的 k-NN 库
-    if not os.path.exists(PROCESSED_DIR):
-        os.makedirs(PROCESSED_DIR)
+    ensure_dir(PROCESSED_DIR_A)
+    ensure_dir(PROCESSED_DIR_B)
 
-    knn_path = os.path.join(PROCESSED_DIR, "knn_db.pkl")
-    with open(knn_path, "wb") as f:
-        pickle.dump(knn_db, f)
-    print(f"    -> [完成] 高清轨迹形状库：{len(knn_db)} 种 OD 对，已保存至 {knn_path}")
+    knn_path_a = os.path.join(PROCESSED_DIR_A, "knn_db.pkl")
+    save_pickle(knn_db, knn_path_a)
+    print(f"    -> [完成] Task A k-NN 库已保存至 {knn_path_a} ({len(knn_db)} 种 OD 对)")
 
-    # 保存 Task B 的 OD 矩阵
     od_avg     = {k: np.mean(v) for k, v in od_dict.items()}
-    global_avg = float(np.mean([np.mean(v) for v in od_dict.values()]))
+    global_avg = float(np.mean([np.mean(v) for v in od_dict.values()])) if od_dict else 1200.0
     knowledge_base = {"od_avg": od_avg, "global_avg": global_avg}
 
-    out_path = os.path.join(PROCESSED_DIR, "od_matrix.pkl")
-    with open(out_path, "wb") as f:
-        pickle.dump(knowledge_base, f)
-    print(f"    -> [完成] 高精度 OD 耗时矩阵：{len(od_avg)} 种 OD 对，已保存至 {out_path}")
+    od_path_a = os.path.join(PROCESSED_DIR_A, "od_matrix.pkl")
+    save_pickle(knowledge_base, od_path_a)
+    print(f"    -> [完成] Task B OD 先验已保存至 {od_path_a} ({len(od_avg)} 种 OD 对)")
+
+    od_path_b = os.path.join(PROCESSED_DIR_B, "od_matrix_org.pkl")
+    save_pickle(knowledge_base, od_path_b)
+    print(f"    -> [完成] Task B 新版 OD 先验已保存至 {od_path_b}")
 
     return knowledge_base
 
 
 def build_training_features_from_ds15(knowledge_base):
     """
-    第二阶段：从降采样 data_ds15 中提取特征，保证与现场考试数据分布完全对齐。
+    第二阶段：从降采样 data_ds15 提取 Task B 特征，构建训练集。
     """
-    print(f"\n[*] 正在读取降采样训练数据 {DS15_TRAIN_FILE} 以对齐特征空间...")
+    print(f"\n[*] 正在读取降采样训练数据 {DS15_TRAIN_FILE}...")
     if not os.path.exists(DS15_TRAIN_FILE):
         print("    [警告] 未找到 data_ds15/train.pkl，请确保文件存在！")
         return
@@ -138,7 +138,7 @@ def build_training_features_from_ds15(knowledge_base):
         ds15_data = pickle.load(f)
 
     od_avg     = knowledge_base.get("od_avg", {})
-    global_avg = knowledge_base.get("global_avg", 1200)
+    global_avg = knowledge_base.get("global_avg", 1200.0)
 
     try:
         from features_and_utils import extract_task_b_features_advanced
@@ -147,41 +147,53 @@ def build_training_features_from_ds15(knowledge_base):
         return
 
     X_train, y_train = [], []
-    print("[*] 正在结合 Org 先验知识与 DS15 物理特征构建最终训练集...")
+    print("[*] 正在构建 Task B 特征与标签...")
 
-    for traj in ds15_data:
-        coords      = traj["coords"]
-        dep_time    = traj["timestamps"][0]
-        travel_time = traj["timestamps"][-1] - traj["timestamps"][0]
+    for idx, traj in enumerate(ds15_data):
+        if idx % 20000 == 0:
+            print(f"    -> 进度: {idx}/{len(ds15_data)}")
 
-        if len(coords) < 2 or travel_time <= 0:
+        coords     = traj["coords"]
+        timestamps = traj["timestamps"]
+        if len(coords) < 2:
             continue
 
-        base_feat, grid_o, grid_d = extract_task_b_features_advanced(coords, dep_time)
-        hist_time  = od_avg.get(f"{grid_o}_{grid_d}", global_avg)
-        final_feat = base_feat + [hist_time]
+        travel_time = timestamps[-1] - timestamps[0]
+        if travel_time <= 0:
+            continue
 
-        X_train.append(final_feat)
+        base_feat, grid_o, grid_d = extract_task_b_features_advanced(coords, timestamps[0])
+        hist_time = od_avg.get(f"{grid_o}_{grid_d}", global_avg)
+        X_train.append(base_feat + [hist_time])
         y_train.append(travel_time)
 
-    print(f"    -> 特征维度: {len(X_train[0])}，样本数: {len(X_train)}")
+    if not X_train:
+        print("    [警告] 未生成任何 Task B 训练样本。")
+        return
 
-    # 保存分批格式（task_b_main.py 读取 X_batch_*.npy）
+    X_arr = np.array(X_train, dtype=np.float32)
+    y_arr = np.array(y_train, dtype=np.float32)
+    print(f"    -> 总样本数: {len(X_arr)}，特征维度: {X_arr.shape[1]}")
+
+    ensure_dir(PROCESSED_DIR_A)
+    ensure_dir(PROCESSED_DIR_B)
+
     batch_idx = 0
-    for start in range(0, len(X_train), BATCH_SIZE):
-        end = start + BATCH_SIZE
-        np.save(os.path.join(PROCESSED_DIR, f"X_batch_{batch_idx}.npy"),
-                np.array(X_train[start:end]))
-        np.save(os.path.join(PROCESSED_DIR, f"y_batch_{batch_idx}.npy"),
-                np.array(y_train[start:end]))
+    for start in range(0, len(X_arr), BATCH_SIZE):
+        np.save(os.path.join(PROCESSED_DIR_A, f"X_batch_{batch_idx}.npy"), X_arr[start:start+BATCH_SIZE])
+        np.save(os.path.join(PROCESSED_DIR_A, f"y_batch_{batch_idx}.npy"), y_arr[start:start+BATCH_SIZE])
         batch_idx += 1
-    print(f"    -> [完成] 分批格式已保存（{batch_idx} 个 batch）")
+    print(f"    -> [完成] Task B 分批训练数据已保存至 {PROCESSED_DIR_A} ({batch_idx} 个 batch)")
+
+    np.save(os.path.join(PROCESSED_DIR_B, "X_train_final.npy"), X_arr)
+    np.save(os.path.join(PROCESSED_DIR_B, "y_train_final.npy"), y_arr)
+    print(f"    -> [完成] Task B 新版训练数据已保存至 {PROCESSED_DIR_B}")
 
 
-if __name__ == "__main__":
+def main():
     print("=" * 60)
-    print("启动双源数据处理管道 (Data Pipeline V2)")
-    print("策略：data_org 提取高清形状库/先验耗时，data_ds15 约束特征空间")
+    print("启动合并数据预处理管道")
+    print("生成 Task A + Task B 所需文件：processed_data_a 与 processed_data_b")
     print("=" * 60)
 
     kb = build_knowledge_from_org()
@@ -189,3 +201,7 @@ if __name__ == "__main__":
         build_training_features_from_ds15(kb)
 
     print("\n[✓] 数据预处理完毕！")
+
+
+if __name__ == "__main__":
+    main()

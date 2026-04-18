@@ -21,7 +21,7 @@ import joblib
 
 DATA_DS15 = os.path.join("data_ds15", "train.pkl")
 DATA_ORG  = os.path.join("data_org",  "train.pkl")
-MODEL_DIR = "processed_data"
+MODEL_DIR = "processed_data_a"
 
 
 def _haversine(lon1, lat1, lon2, lat2):
@@ -215,7 +215,7 @@ def train_model():
     ds_lon_val   = lgb.Dataset(X[val_idx],   y_lon[val_idx], reference=ds_lon_train)
     model_lon = lgb.train(
         params, ds_lon_train,
-        num_boost_round=2000,
+        num_boost_round=10000,
         valid_sets=[ds_lon_val],
         callbacks=[
             lgb.early_stopping(50),
@@ -228,7 +228,7 @@ def train_model():
     ds_lat_val   = lgb.Dataset(X[val_idx],   y_lat[val_idx], reference=ds_lat_train)
     model_lat = lgb.train(
         params, ds_lat_train,
-        num_boost_round=2000,
+        num_boost_round=10000,
         valid_sets=[ds_lat_val],
         callbacks=[
             lgb.early_stopping(50),
