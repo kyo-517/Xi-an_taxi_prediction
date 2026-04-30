@@ -12,7 +12,12 @@ OD 矩阵改进：
 import os
 import pickle
 import numpy as np
-from features_and_utils import extract_task_b_features_advanced, get_grid_id, lookup_od_time
+
+# 从原始 features_and_utils 借用基础工具（不修改该文件）
+from features_and_utils import haversine, get_grid_id
+
+# 从 task_b_main_new 借用增强特征提取和 OD 查询（Task B 专用逻辑集中在那里）
+from task_b_main_new import extract_features_v2, lookup_od_time
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 ORG_TRAIN_FILE  = os.path.join("data_org",  "train.pkl")
@@ -126,7 +131,7 @@ def build_knowledge_from_org():
     od_coarse = _build_od_dict(coords_list, travel_times, precision=5)
 
     all_times  = np.array(travel_times)
-    global_avg = float(np.mean(all_times)) if len(all_times) > 0 else 1200.0
+    global_avg = float(np.mean(all_times))   if len(all_times) > 0 else 1200.0
     global_med = float(np.median(all_times)) if len(all_times) > 0 else 1200.0
 
     knowledge_base = {
@@ -182,12 +187,9 @@ def build_training_features_from_ds15(knowledge_base):
             continue
 
         try:
-            feat, (g_o_fine, g_d_fine), (g_o_coarse, g_d_coarse) = \
-                extract_task_b_features_advanced(coords, timestamps[0])
-
+            feat, g_o_f, g_d_f, g_o_c, g_d_c = extract_features_v2(coords, timestamps[0])
             od_mean, od_med, od_std, od_cnt = lookup_od_time(
-                knowledge_base, g_o_fine, g_d_fine, g_o_coarse, g_d_coarse)
-
+                knowledge_base, g_o_f, g_d_f, g_o_c, g_d_c)
             X_train.append(feat + [od_mean, od_med, od_std, float(od_cnt)])
             y_train.append(travel_time)
         except Exception:
