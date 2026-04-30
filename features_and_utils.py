@@ -34,18 +34,18 @@ def extract_task_b_features_advanced(coords, departure_timestamp):
     """
     coords = np.array(coords)
     num_points = len(coords)
-
+    
     lon_start, lat_start = coords[0]
     lon_end, lat_end = coords[-1]
-
+    
     straight_dist = haversine(lon_start, lat_start, lon_end, lat_end)
-
+    
     total_dist = 0.0
     for i in range(1, num_points):
         dist = haversine(coords[i-1][0], coords[i-1][1], coords[i][0], coords[i][1])
         if not np.isnan(dist):
             total_dist += dist
-
+            
     sinuosity = total_dist / straight_dist if straight_dist > 0 else 1.0
     # 提取起终点的网格ID (供后续构建 OD 矩阵使用)
     grid_o = get_grid_id(lon_start, lat_start)
@@ -55,32 +55,32 @@ def extract_task_b_features_advanced(coords, departure_timestamp):
     hour = dt.hour
     weekday = dt.weekday()
     is_rush_hour = 1 if (7 <= hour <= 9) or (17 <= hour <= 19) else 0
-
+    
     # 【新增特征 1】：国庆黄金周判定 (2016年10月特有)
     is_national_day = 1 if (dt.month == 10 and 1 <= dt.day <= 7) else 0
-
+    
     # 【新增特征 2】：距离市中心（钟楼）的距离
     # 西安钟楼坐标大致为: 经度 108.940, 纬度 34.265
     dist_to_center_start = haversine(lon_start, lat_start, 108.940, 34.265)
     dist_to_center_end = haversine(lon_end, lat_end, 108.940, 34.265)
-
+    
     baseline_time_est = num_points * 15.0
-
+    
     # 记得将新增的特征加入返回列表
     return [
-        num_points,
-        total_dist,
-        straight_dist,
-        sinuosity,
-        hour,
+        num_points,           
+        total_dist,           
+        straight_dist,        
+        sinuosity,            
+        hour,                 
         weekday,
-        is_rush_hour,
+        is_rush_hour,         
         is_national_day,      # 新增
         dist_to_center_start, # 新增
         dist_to_center_end,   # 新增
-        baseline_time_est,
-        lon_start, lat_start,
-        lon_end, lat_end
+        baseline_time_est,    
+        lon_start, lat_start, 
+        lon_end, lat_end      
     ], grid_o, grid_d
 
 def evaluate_metrics(y_true, y_pred):
